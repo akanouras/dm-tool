@@ -61,6 +61,19 @@ def print_item(key, value, indent=0, file=None):
     print(u(fmt).format(' ' * indent, key, formatter(value)), file=file)
 
 
+# Get a unique display number. It's racy,
+# but the only reliable method to get one.
+def get_free_display_number():
+    display_number = 0
+    while True:
+        try:
+            os.stat('/tmp/.X{0}-lock'.format(display_number))
+            display_number += 1
+        except OSError as e:
+            if e.errno == errno.ENOENT:
+                return display_number
+
+
 class DMTool(object):
     __doc__ = COMMANDS_HELP
 
@@ -148,11 +161,11 @@ class DMTool(object):
         def get_proxy(path):
             return self._bus.get_object('org.freedesktop.DisplayManager', path)
 
-        def get_properties(proxy, interface):
-            interfaces = dict(self._dbus_proxies.values())
+        def get_properties(proxy):
             path = proxy.object_path.rstrip('0123456789')
-            intf = interfaces[path]
-            return proxy.GetAll(intf, dbus_interface=dbus.PROPERTIES_IFACE)
+            interfaces = dict(self._dbus_proxies.values())
+            interface = interfaces[path]
+            return proxy.GetAll(interface, dbus_interface=dbus.PROPERTIES_IFACE)
 
         def get_name_from_path(path):
             return path.split('/org/freedesktop/DisplayManager/')[-1]
@@ -168,14 +181,13 @@ class DMTool(object):
 
             print(u('{0}').format(seat_name), file=output)
 
-            properties = get_properties(
-                seat_proxy, 'org.freedesktop.DisplayManager.Seat')
-            for key, value in sorted(properties.items()):
+            seat_properties = get_properties(seat_proxy)
+            for key, value in sorted(seat_properties.items()):
                 if key == 'Sessions':
                     continue
                 print_item(key, value, indent=2, file=output)
 
-            sessions = properties['Sessions']
+            sessions = seat_properties['Sessions']
 
             for session in sessions:
                 session_name = get_name_from_path(session)
@@ -183,9 +195,8 @@ class DMTool(object):
 
                 print(u('  {0}').format(session_name), file=output)
 
-                properties = get_properties(
-                    session_proxy, 'org.freedesktop.DisplayManager.Session')
-                for key, value in sorted(properties.items()):
+                session_properties = get_properties(session_proxy)
+                for key, value in sorted(session_properties.items()):
                     if key == 'Seat':
                         continue
                     print_item(key, value, indent=4, file=output)
@@ -204,23 +215,22 @@ class DMTool(object):
                 os.kill(xephyr_pid, signal.SIGQUIT)
                 raise StandardError('Unable to add seat: {0}'.format(e))
 
-        # Get a unique display number. It's racy,
-        # but the only reliable method to get one.
-        for xephyr_display_number in range(65535 - 5000):
-            try:
-                os.stat('/tmp/.X{0}-lock'.format(xephyr_display_number))
-            except OSError as e:
-                if e.errno == errno.ENOENT:
-                    break
+        for arg in xephyr_args:
+            if arg.startswith(':'):
+                try:
+                    xephyr_display_number = int(arg.lstrip(':'))
+                except ValueError:
+                    continue
+                xephyr_argv = ['xephyr']
+                break
         else:
-            raise StandardError('Did not find a free X11 display number!')
+            xephyr_display_number = get_free_display_number()
+            xephyr_argv = ['Xephyr', ':{0}'.format(xephyr_display_number)]
+
+        xephyr_argv.extend(xephyr_args)
 
         # Wait for signal from Xephyr when it is ready
         signal.signal(signal.SIGUSR1, xephyr_signal_cb)
-
-        xephyr_cmd = ['Xephyr', ':{0}'.format(xephyr_display_number)]
-        if xephyr_args:
-            xephyr_cmd.extend(xephyr_args)
 
         xephyr_pid = os.fork()
         if xephyr_pid == 0:
@@ -229,7 +239,7 @@ class DMTool(object):
             # This makes Xephyr SIGUSR1 its parent when ready.
             signal.signal(signal.SIGUSR1, signal.SIG_IGN)
             try:
-                os.execlp(xephyr_cmd[0], *xephyr_cmd)
+                os.execlp(xephyr_argv[0], *xephyr_argv)
             except OSError as e:
                 sys.exit(e.errno)
             except:
@@ -280,8 +290,6 @@ class DMTool(object):
 
 
 def get_parser():
-    # TODO: Rewrite using getopt - {opt,arg}parse suck in multiple ways
-    # for this tool's argument style.
     parser = argparse.ArgumentParser(
         description='Display Manager tool',
         usage='%(prog)s [OPTION...] COMMAND [ARGS...]',

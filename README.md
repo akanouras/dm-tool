@@ -61,7 +61,6 @@ TODO
 
 * Package for PyPI
 * Rewrite the argv parser using getopt
-* add-nested-seat: Allow overriding Xephyr's display number
 * Cover the full org.freedesktop.DisplayManager API
 * Better error reporting
 * Replace under/overengineered pieces of code
