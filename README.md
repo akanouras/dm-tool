@@ -17,6 +17,9 @@ Copyright (C) 2013 [Antonis Kanouras](mailto:antonis@metadosis.eu)
     You can find a copy of the GNU General Public License in the LICENSE
     file distributed with this program or at http://www.gnu.org/licenses/
 
+dm-tool.c author: [Robert Ancell](mailto:robert.ancell@canonical.com)
+Please don't mail him with questions about this project.
+
 Requirements
 ------------
 
@@ -34,6 +37,7 @@ Usage
     Options:
       -h, --help     Show help options
       -v, --version  Show release version
+      --debug        Show debugging information
       --session-bus  Use session D-Bus
 
     Commands:

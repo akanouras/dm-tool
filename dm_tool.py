@@ -38,6 +38,7 @@ import signal
 import traceback
 import argparse
 import collections
+import itertools
 from io import StringIO
 import dbus
 
@@ -61,17 +62,19 @@ def print_item(key, value, indent=0, file=None):
     print(u(fmt).format(' ' * indent, key, formatter(value)), file=file)
 
 
-# Get a unique display number. It's racy,
-# but the only reliable method to get one.
 def get_free_display_number():
-    display_number = 0
-    while True:
+    '''Get a unique display number.
+
+    It's racy, but the only reliable method to get one.'''
+
+    for display_number in itertools.count():
         try:
             os.stat('/tmp/.X{0}-lock'.format(display_number))
-            display_number += 1
         except OSError as e:
             if e.errno == errno.ENOENT:
                 return display_number
+            else:
+                raise
 
 
 class DMTool(object):
@@ -135,7 +138,7 @@ class DMTool(object):
 
     @classmethod
     def _get_commands(self):
-        'Returns a dict of commands: descriptions'
+        'Returns a dict of command: description'
         return {cmd.replace('_', '-'): getattr(self, cmd).__doc__
                 for cmd in dir(self) if not cmd.startswith('_')}
 
@@ -172,8 +175,8 @@ class DMTool(object):
 
         output = StringIO()
 
-        proxy = get_proxy('/org/freedesktop/DisplayManager')
-        seats = get_properties(proxy, 'org.freedesktop.DisplayManager')['Seats']
+        dm_proxy = get_proxy('/org/freedesktop/DisplayManager')
+        seats = get_properties(dm_proxy)['Seats']
 
         for seat in seats:
             seat_name = get_name_from_path(seat)
@@ -268,25 +271,12 @@ class DMTool(object):
     def add_seat(self, type, *args, **kwargs):
         'Add a dynamic seat'
 
-        # Workaround for Python not allowing "raise" in comprehensions.
-        def type_error():
-            raise TypeError('Non-keyword arguments must be strings')
-
+        # AddSeat expects a list of tuples
         properties = [tuple(arg.split('=', 1))
-                      if arg.__class__.__name__ == 'str' else type_error()
-                      for arg in args]
-        if kwargs:
-            properties.extend(kwargs.items())
+                      if not isinstance(arg, tuple) else arg
+                      for arg in args] + kwargs.items()
 
-        try:
-            return self._dbus_call('AddSeat', type, properties)
-        except dbus.exceptions.DBusException as e:
-            if e._dbus_error_name == 'org.freedesktop.DBus.Error.AccessDenied':
-                exc = StandardError('Access denied')
-                exc.e = e
-                raise exc
-            else:
-                raise
+        return self._dbus_call('AddSeat', type, properties)
 
 
 def get_parser():
@@ -303,6 +293,9 @@ def get_parser():
     options.add_argument('-v', '--version', help='Show release version',
                          action='version',
                          version='%(prog)s {0}'.format(__version__))
+    options.add_argument('--debug', dest='debug',
+                         action='store_true',
+                         help='Show debugging information')
     options.add_argument('--session-bus', dest='session_bus',
                          action='store_true',
                          help='Use session D-Bus')
@@ -325,14 +318,16 @@ def main():
 
     try:
         print(dmtool(args.command, *command_args) or '')
-    except TypeError as e:
-        traceback.print_exc()
-        print(e, file=sys.stderr)
-        parser.print_help()
-        return os.EX_USAGE
     except Exception as e:
-        print(e, file=sys.stderr)
-        return EXIT_FAILURE
+        if args.debug:
+            traceback.print_exc()
+        else:
+            print(e, file=sys.stderr)
+        if isinstance(e, TypeError):
+            parser.print_help()
+            return os.EX_USAGE
+        else:
+            return EXIT_FAILURE
 
 if __name__ == '__main__':
     sys.exit(main())
