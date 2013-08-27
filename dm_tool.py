@@ -57,11 +57,6 @@ DBUS_FORMATS.update({
 })
 
 
-def print_item(key, value, indent=0, file=None):
-    fmt, formatter = FORMATS[type(value)]
-    print(u(fmt).format(' ' * indent, key, formatter(value)), file=file)
-
-
 def get_free_display_number():
     '''Get a unique display number.
 
@@ -169,36 +164,38 @@ class DMTool(object):
         def get_name_from_path(path):
             return path.split('/org/freedesktop/DisplayManager/')[-1]
 
+        def print_item(key, value, indent=0, file=None):
+            fmt, formatter = DBUS_FORMATS[type(value)]
+            print(u(fmt).format(' ' * indent, key, formatter(value)), file=file)
+
+        def print_path(path, exclude=None, indent=0, file=None):
+            path_name = get_name_from_path(path)
+            path_proxy = get_proxy(path)
+
+            print(u('{0}{1}').format(' ' * indent, path_name), file=file)
+            indent += 2
+
+            descend_paths = []
+            path_properties = get_properties(path_proxy)
+            for key, value in sorted(path_properties.items()):
+                if value == exclude:
+                    continue
+                if isinstance(value, dbus.Array) and isinstance(
+                        value[0], dbus.ObjectPath):
+                    descend_paths += value
+                    continue
+                print_item(key, value, indent=indent, file=file)
+
+            for descend_path in descend_paths:
+                print_path(descend_path, exclude=path, indent=indent, file=file)
+
         output = StringIO()
 
         dm_proxy = get_proxy('/org/freedesktop/DisplayManager')
         seats = get_properties(dm_proxy)['Seats']
 
         for seat in seats:
-            seat_name = get_name_from_path(seat)
-            seat_proxy = get_proxy(seat)
-
-            print(u('{0}').format(seat_name), file=output)
-
-            seat_properties = get_properties(seat_proxy)
-            for key, value in sorted(seat_properties.items()):
-                if key == 'Sessions':
-                    continue
-                print_item(key, value, indent=2, file=output)
-
-            sessions = seat_properties['Sessions']
-
-            for session in sessions:
-                session_name = get_name_from_path(session)
-                session_proxy = get_proxy(session)
-
-                print(u('  {0}').format(session_name), file=output)
-
-                session_properties = get_properties(session_proxy)
-                for key, value in sorted(session_properties.items()):
-                    if key == 'Seat':
-                        continue
-                    print_item(key, value, indent=4, file=output)
+            print_path(seat, file=output)
 
         return output.getvalue().rstrip('\n')
 
