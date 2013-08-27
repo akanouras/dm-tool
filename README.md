@@ -65,6 +65,7 @@ TODO
 
 * Package for PyPI
 * Rewrite the argv parser using getopt
+* Take advantage of Xephyr 1.13+ -displayfd
 * Cover the full org.freedesktop.DisplayManager API
 * Better error reporting
 * Replace under/overengineered pieces of code

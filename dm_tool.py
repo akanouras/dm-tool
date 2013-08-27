@@ -49,8 +49,8 @@ except NameError:
     unicode = str
 u = unicode
 
-FORMATS = collections.defaultdict(lambda: ("{0}{1}={2}", lambda x: x))
-FORMATS.update({
+DBUS_FORMATS = collections.defaultdict(lambda: ("{0}{1}={2}", lambda x: x))
+DBUS_FORMATS.update({
     # DBus type: (format, formatter)
     dbus.String: ("{0}{1}='{2}'", lambda x: x),
     dbus.Boolean: ("{0}{1}={2}", lambda x: u(bool(x)).lower()),
@@ -80,29 +80,25 @@ def get_free_display_number():
 class DMTool(object):
     __doc__ = COMMANDS_HELP
 
-    class _BaseDBusProxies(dict):
-        'Dict of proxy: (object_path, interface)'
-
-    _dbus_proxies = _BaseDBusProxies({
+    # Dict of proxy: (object_path, interface)
+    _dbus_proxies = {
         'dm': ('/org/freedesktop/DisplayManager',
                'org.freedesktop.DisplayManager'),
         'seat': ('/org/freedesktop/DisplayManager/Seat',
                  'org.freedesktop.DisplayManager.Seat'),
         'session': ('/org/freedesktop/DisplayManager/Session',
                     'org.freedesktop.DisplayManager.Session')
-    })
+    }
 
-    class _BaseDBusMethods(dict):
-        'Dict of method: proxy'
-
-    _dbus_methods = _BaseDBusMethods({
+    # Dict of method: proxy
+    _dbus_methods = {
         'SwitchToGreeter': 'seat',
         'SwitchToUser': 'seat',
         'SwitchToGuest': 'seat',
         'Lock': 'seat',
         'AddLocalXSeat': 'dm',
         'AddSeat': 'dm',
-    })
+    }
 
     def __init__(self, bus=None):
         'bus must be a dbus.*Bus instance'
