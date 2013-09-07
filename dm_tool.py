@@ -28,9 +28,6 @@ Commands:
   add-seat TYPE [NAME=VALUE...]       Add a dynamic seat
 '''
 
-EXIT_SUCCESS = 0
-EXIT_FAILURE = 1
-
 import os
 import sys
 import errno
@@ -49,13 +46,6 @@ except NameError:
     unicode = str
 u = unicode
 
-DBUS_FORMATS = collections.defaultdict(lambda: ("{0}{1}={2}", lambda x: x))
-DBUS_FORMATS.update({
-    # DBus type: (format, formatter)
-    dbus.String: ("{0}{1}='{2}'", lambda x: x),
-    dbus.Boolean: ("{0}{1}={2}", lambda x: u(bool(x)).lower()),
-})
-
 
 def get_free_display_number():
     '''Get a unique display number.
@@ -72,31 +62,45 @@ def get_free_display_number():
                 raise
 
 
+class DBusFormats(collections.defaultdict):
+    'Dict of dbus.types.*: (format, formatter)'
+
+    default_factory = lambda: ("{0}{1}={2}", lambda x: x)
+
+    default_formats = {
+        dbus.String: ("{0}{1}='{2}'", lambda x: x),
+        dbus.Boolean: ("{0}{1}={2}", lambda x: u(bool(x)).lower()),
+    }
+
+    def __init__(self, default_format=None, default_formats=None):
+        if default_format is not None:
+            self.default_factory = default_format
+        if default_formats is not None:
+            self.default_formats = default_formats
+        self.update(self.default_formats)
+
+
 class DMTool(object):
     __doc__ = COMMANDS_HELP
 
-    # Dict of proxy: (object_path, interface)
-    _dbus_proxies = {
-        'dm': ('/org/freedesktop/DisplayManager',
-               'org.freedesktop.DisplayManager'),
-        'seat': ('/org/freedesktop/DisplayManager/Seat',
-                 'org.freedesktop.DisplayManager.Seat'),
-        'session': ('/org/freedesktop/DisplayManager/Session',
-                    'org.freedesktop.DisplayManager.Session')
+    # Dict of method: path
+    _dbus_paths = {
+        'SwitchToGreeter': '/org/freedesktop/DisplayManager/Seat',
+        'SwitchToUser': '/org/freedesktop/DisplayManager/Seat',
+        'SwitchToGuest': '/org/freedesktop/DisplayManager/Seat',
+        'Lock': '/org/freedesktop/DisplayManager/Seat',
+        'AddLocalXSeat': '/org/freedesktop/DisplayManager',
+        'AddSeat': '/org/freedesktop/DisplayManager',
     }
 
-    # Dict of method: proxy
-    _dbus_methods = {
-        'SwitchToGreeter': 'seat',
-        'SwitchToUser': 'seat',
-        'SwitchToGuest': 'seat',
-        'Lock': 'seat',
-        'AddLocalXSeat': 'dm',
-        'AddSeat': 'dm',
-    }
+    _dbus_formats = DBusFormats()
 
     def __init__(self, bus=None):
         'bus must be a dbus.*Bus instance'
+        if not os.environ.get('XDG_SEAT_PATH', '').startswith(
+                '/org/freedesktop/DisplayManager/Seat'):
+            raise StandardError('Not running inside a display manager,'
+                                ' XDG_SEAT_PATH is invalid or not defined')
         if bus is None:
             bus = dbus.SystemBus()
         self._bus = bus
@@ -106,22 +110,20 @@ class DMTool(object):
         command = getattr(self, command.replace('-', '_'))
         return command(*args, **kwargs)
 
+    @staticmethod
+    def _path_to_interface(path):
+        return path.rstrip('0123456789').lstrip('/').replace('/', '.')
+
+    def _get_proxy(self, path):
+        return self._bus.get_object('org.freedesktop.DisplayManager', path)
+
     def _dbus_call(self, method, *args, **kwargs):
         'Call one of the predefined dbus methods'
-        method_type = self._dbus_methods[method]
-        object_path, interface = self._dbus_proxies[method_type]
-        if method_type == 'seat':
-            try:
-                new_object_path = os.environ['XDG_SEAT_PATH']
-                if new_object_path.startswith(object_path):
-                    object_path = new_object_path
-                else:
-                    raise KeyError
-            except KeyError as e:
-                raise StandardError('Not running inside a display manager,'
-                                    ' XDG_SEAT_PATH is invalid or not defined')
-        proxy = self._bus.get_object('org.freedesktop.DisplayManager',
-                                     object_path)
+        object_path = self._dbus_paths[method]
+        interface = self._path_to_interface(object_path)
+        if object_path == '/org/freedesktop/DisplayManager/Seat':
+            object_path = os.environ['XDG_SEAT_PATH']
+        proxy = self._get_proxy(object_path)
         method = proxy.get_dbus_method(
             method,
             dbus_interface=interface)
@@ -152,26 +154,21 @@ class DMTool(object):
     def list_seats(self):
         'List the active seats'
 
-        def get_proxy(path):
-            return self._bus.get_object('org.freedesktop.DisplayManager', path)
-
         def get_properties(proxy):
-            path = proxy.object_path.rstrip('0123456789')
-            interfaces = dict(self._dbus_proxies.values())
-            interface = interfaces[path]
+            interface = self._path_to_interface(proxy.object_path)
             return proxy.GetAll(interface, dbus_interface=dbus.PROPERTIES_IFACE)
 
         def get_name_from_path(path):
             return path.split('/org/freedesktop/DisplayManager/')[-1]
 
         def print_item(key, value, indent=0, file=None):
-            fmt, formatter = DBUS_FORMATS[type(value)]
+            fmt, formatter = self._dbus_formats[type(value)]
             print(u(fmt).format(' ' * indent, key, formatter(value)), file=file)
 
         def print_path(path, exclude=None, indent=0, file=None):
-            path_name = get_name_from_path(path)
-            path_proxy = get_proxy(path)
+            path_proxy = self._get_proxy(path)
 
+            path_name = get_name_from_path(path)
             print(u('{0}{1}').format(' ' * indent, path_name), file=file)
             indent += 2
 
@@ -180,9 +177,9 @@ class DMTool(object):
             for key, value in sorted(path_properties.items()):
                 if value == exclude:
                     continue
-                if isinstance(value, dbus.Array) and isinstance(
-                        value[0], dbus.ObjectPath):
-                    descend_paths += value
+                if isinstance(value, dbus.Array):
+                    if len(value) > 0 and isinstance(value[0], dbus.ObjectPath):
+                        descend_paths += value
                     continue
                 print_item(key, value, indent=indent, file=file)
 
@@ -191,10 +188,10 @@ class DMTool(object):
 
         output = StringIO()
 
-        dm_proxy = get_proxy('/org/freedesktop/DisplayManager')
+        dm_proxy = self._get_proxy('/org/freedesktop/DisplayManager')
         seats = get_properties(dm_proxy)['Seats']
 
-        for seat in seats:
+        for seat in sorted(seats):
             print_path(seat, file=output)
 
         return output.getvalue().rstrip('\n')
@@ -202,59 +199,62 @@ class DMTool(object):
     def add_nested_seat(self, *xephyr_args):
         'Start a nested display'
 
-        def xephyr_signal_cb(sig, frame):
-            try:
-                self._sighandler_result = self._dbus_call(
-                    'AddLocalXSeat', xephyr_display_number)
-            except Exception as e:
-                self._sighandler_result = 'Unable to add seat: {0}'.format(e)
-                os.kill(xephyr_pid, signal.SIGQUIT)
-                raise StandardError('Unable to add seat: {0}'.format(e))
+        def xephyr_signal_handler(sig, frame):
+            # Fugly, nonlocal (Py3K+) would make this prettier
+            xephyr_signal_handler.was_called = True
 
+        def setup_xephyr_handler():
+            xephyr_signal_handler.original_handler = signal.getsignal(signal.SIGUSR1)
+            xephyr_signal_handler.was_called = False
+            signal.signal(signal.SIGUSR1, xephyr_signal_handler)
+
+        def wait_for_xephyr(pid):
+            try:
+                os.waitpid(pid, 0)
+            except:  # On purpose
+                pass
+            signal.signal(signal.SIGUSR1, xephyr_signal_handler.original_handler)
+            return xephyr_signal_handler.was_called
+
+        xephyr_argv = ['Xephyr']
+
+        # Determine the display number to use for Xephyr
         for arg in xephyr_args:
             if arg.startswith(':'):
                 try:
                     xephyr_display_number = int(arg.lstrip(':'))
+                    break
                 except ValueError:
                     continue
-                xephyr_argv = ['xephyr']
-                break
         else:
             xephyr_display_number = get_free_display_number()
-            xephyr_argv = ['Xephyr', ':{0}'.format(xephyr_display_number)]
+            xephyr_argv += ':{0}'.format(xephyr_display_number)
 
         xephyr_argv.extend(xephyr_args)
 
         # Wait for signal from Xephyr when it is ready
-        signal.signal(signal.SIGUSR1, xephyr_signal_cb)
+        setup_xephyr_handler()
 
+        # Spawn Xephyr
         xephyr_pid = os.fork()
         if xephyr_pid == 0:
             # In child
-            os.closerange(0, 1024)
-            # This makes Xephyr SIGUSR1 its parent when ready.
+            os.closerange(0, 1023)
+            # This makes X(ephyr) SIGUSR1 its parent when ready.
             signal.signal(signal.SIGUSR1, signal.SIG_IGN)
             try:
-                os.execlp(xephyr_argv[0], *xephyr_argv)
+                os.execvp(xephyr_argv[0], xephyr_argv)
             except OSError as e:
                 sys.exit(e.errno)
-            except:
-                # All file descriptors are closed, oh well.
-                sys.exit(os.EX_OSERR)
 
-        try:
-            os.waitpid(xephyr_pid, 0)
-        except OSError as e:
-            if e.errno == errno.EINTR:
-                # Signal handler returned
-                result = self._sighandler_result
-            else:
-                raise
-
-        try:
-            return result
-        except UnboundLocalError:
-            # Xephyr failed to launch for whatever reason.
+        # Wait for Xephyr to signal us
+        if wait_for_xephyr(xephyr_pid):
+            try:
+                return self._dbus_call('AddLocalXSeat', xephyr_display_number)
+            except Exception as e:
+                os.kill(xephyr_pid, signal.SIGQUIT)
+                raise StandardError('Unable to add seat: {0}'.format(e))
+        else:
             raise StandardError('Xephyr launch failed')
 
     def add_local_x_seat(self, display_number):
@@ -320,7 +320,7 @@ def main():
             parser.print_help()
             return os.EX_USAGE
         else:
-            return EXIT_FAILURE
+            return 1
 
 if __name__ == '__main__':
     sys.exit(main())
