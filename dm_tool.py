@@ -99,7 +99,7 @@ class DMTool(object):
         'bus must be a dbus.*Bus instance'
         if not os.environ.get('XDG_SEAT_PATH', '').startswith(
                 '/org/freedesktop/DisplayManager/Seat'):
-            raise StandardError('Not running inside a display manager,'
+            raise Exception('Not running inside a display manager,'
                                 ' XDG_SEAT_PATH is invalid or not defined')
         if bus is None:
             bus = dbus.SystemBus()
@@ -253,9 +253,9 @@ class DMTool(object):
                 return self._dbus_call('AddLocalXSeat', xephyr_display_number)
             except Exception as e:
                 os.kill(xephyr_pid, signal.SIGQUIT)
-                raise StandardError('Unable to add seat: {0}'.format(e))
+                raise Exception('Unable to add seat: {0}'.format(e))
         else:
-            raise StandardError('Xephyr launch failed')
+            raise Exception('Xephyr launch failed')
 
     def add_local_x_seat(self, display_number):
         'Add a local X seat'
